@@ -130,3 +130,84 @@ fn main() {
         eprintln!("Usage: cargo run -- transactions.csv > accounts.csv");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal::Decimal;
+    use std::str::FromStr;
+
+    fn dec(n: &str) -> Decimal {
+        Decimal::from_str(n).unwrap()
+    }
+
+    fn test_account(client: u16) -> Account {
+        Account { client, ..Default::default() }
+    }
+
+    #[test]
+    fn test_deposit() {
+        let mut acc = test_account(1);
+        acc.deposit(1, dec("10.0"));
+        assert_eq!(acc.available, dec("10.0"));
+        assert_eq!(acc.total, dec("10.0"));
+        assert_eq!(acc.held, dec("0.0"));
+    }
+
+    #[test]
+    fn test_withdrawal() {
+        let mut acc = test_account(1);
+        acc.deposit(1, dec("10.0"));
+        acc.withdrawal(dec("4.0"));
+        assert_eq!(acc.available, dec("6.0"));
+        assert_eq!(acc.total, dec("6.0"));
+    }
+
+    #[test]
+    fn test_withdrawal_insufficient() {
+        let mut acc = test_account(1);
+        acc.deposit(1, dec("2.0"));
+        acc.withdrawal(dec("3.0"));
+        assert_eq!(acc.available, dec("2.0"));
+    }
+
+    #[test]
+    fn test_dispute_valid() {
+        let mut acc = test_account(1);
+        acc.deposit(1, dec("10.0"));
+        acc.dispute(1);
+        assert_eq!(acc.available, dec("0.0"));
+        assert_eq!(acc.held, dec("10.0"));
+    }
+
+    #[test]
+    fn test_resolve() {
+        let mut acc = test_account(1);
+        acc.deposit(1, dec("10.0"));
+        acc.dispute(1);
+        acc.resolve(1);
+        assert_eq!(acc.available, dec("10.0"));
+        assert_eq!(acc.held, dec("0.0"));
+    }
+
+    #[test]
+    fn test_chargeback() {
+        let mut acc = test_account(1);
+        acc.deposit(1, dec("10.0"));
+        acc.dispute(1);
+        acc.chargeback(1);
+        assert_eq!(acc.total, dec("0.0"));
+        assert_eq!(acc.held, dec("0.0"));
+        assert!(acc.locked);
+    }
+
+    #[test]
+    fn test_locked_account_blocks_deposit() {
+        let mut acc = test_account(1);
+        acc.deposit(1, dec("10.0"));
+        acc.dispute(1);
+        acc.chargeback(1);
+        acc.deposit(2, dec("10.0"));
+        assert_eq!(acc.total, dec("0.0"));
+    }
+}
