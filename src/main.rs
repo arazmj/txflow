@@ -134,12 +134,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal::Decimal;
-    use std::str::FromStr;
-
-    fn dec(n: &str) -> Decimal {
-        Decimal::from_str(n).unwrap()
-    }
+    use rust_decimal::dec;
 
     fn test_account(client: u16) -> Account {
         Account { client, ..Default::default() }
@@ -148,66 +143,105 @@ mod tests {
     #[test]
     fn test_deposit() {
         let mut acc = test_account(1);
-        acc.deposit(1, dec("10.0"));
-        assert_eq!(acc.available, dec("10.0"));
-        assert_eq!(acc.total, dec("10.0"));
-        assert_eq!(acc.held, dec("0.0"));
+        acc.deposit(1, dec!(10.0));
+        assert_eq!(acc.available, dec!(10.0));
+        assert_eq!(acc.total, dec!(10.0));
+        assert_eq!(acc.held, dec!(0.0));
     }
 
     #[test]
     fn test_withdrawal() {
         let mut acc = test_account(1);
-        acc.deposit(1, dec("10.0"));
-        acc.withdrawal(dec("4.0"));
-        assert_eq!(acc.available, dec("6.0"));
-        assert_eq!(acc.total, dec("6.0"));
+        acc.deposit(1, dec!(10.0));
+        acc.withdrawal(dec!(4.0));
+        assert_eq!(acc.available, dec!(6.0));
+        assert_eq!(acc.total, dec!(6.0));
     }
 
     #[test]
     fn test_withdrawal_insufficient() {
         let mut acc = test_account(1);
-        acc.deposit(1, dec("2.0"));
-        acc.withdrawal(dec("3.0"));
-        assert_eq!(acc.available, dec("2.0"));
+        acc.deposit(1, dec!(2.0));
+        acc.withdrawal(dec!(3.0));
+        assert_eq!(acc.available, dec!(2.0));
     }
 
     #[test]
     fn test_dispute_valid() {
         let mut acc = test_account(1);
-        acc.deposit(1, dec("10.0"));
+        acc.deposit(1, dec!(10.0));
         acc.dispute(1);
-        assert_eq!(acc.available, dec("0.0"));
-        assert_eq!(acc.held, dec("10.0"));
+        assert_eq!(acc.available, dec!(0.0));
+        assert_eq!(acc.held, dec!(10.0));
     }
 
     #[test]
     fn test_resolve() {
         let mut acc = test_account(1);
-        acc.deposit(1, dec("10.0"));
+        acc.deposit(1, dec!(10.0));
         acc.dispute(1);
         acc.resolve(1);
-        assert_eq!(acc.available, dec("10.0"));
-        assert_eq!(acc.held, dec("0.0"));
+        assert_eq!(acc.available, dec!(10.0));
+        assert_eq!(acc.held, dec!(0.0));
     }
 
     #[test]
     fn test_chargeback() {
         let mut acc = test_account(1);
-        acc.deposit(1, dec("10.0"));
+        acc.deposit(1, dec!(10.0));
         acc.dispute(1);
         acc.chargeback(1);
-        assert_eq!(acc.total, dec("0.0"));
-        assert_eq!(acc.held, dec("0.0"));
+        assert_eq!(acc.total, dec!(0.0));
+        assert_eq!(acc.held, dec!(0.0));
         assert!(acc.locked);
     }
 
     #[test]
     fn test_locked_account_blocks_deposit() {
         let mut acc = test_account(1);
-        acc.deposit(1, dec("10.0"));
+        acc.deposit(1, dec!(10.0));
         acc.dispute(1);
         acc.chargeback(1);
-        acc.deposit(2, dec("10.0"));
-        assert_eq!(acc.total, dec("0.0"));
+        acc.deposit(2, dec!(10.0));
+        assert_eq!(acc.total, dec!(0.0));
+    }
+
+    #[test]
+    fn test_dispute_nonexistent_tx() {
+        let mut acc = test_account(1);
+        acc.dispute(99); // No tx inserted
+        assert_eq!(acc.available, dec!(0.0));
+        assert_eq!(acc.held, dec!(0.0));
+    }
+
+    #[test]
+    fn test_dispute_on_withdrawal_should_be_ignored() {
+        let mut acc = test_account(1);
+        acc.deposit(1, dec!(10.0));
+        acc.withdrawal(dec!(5.0)); // No tx id stored for withdrawal
+        acc.dispute(2); // Attempt to dispute non-existent withdrawal
+        assert_eq!(acc.available, dec!(5.0));
+        assert_eq!(acc.held, dec!(0.0));
+        assert_eq!(acc.total, dec!(5.0));
+    }
+
+    #[test]
+    fn test_dispute_tx_not_owned_by_client_is_ignored() {
+        let mut acc1 = test_account(1);
+        let mut acc2 = test_account(2);
+
+        // Only acc1 has tx 100
+        acc1.deposit(100, dec!(15.0));
+
+        // acc2 tries to dispute tx 100 (which it doesn't own)
+        acc2.dispute(100);
+
+        // Assert acc1 remains unchanged
+        assert_eq!(acc1.available, dec!(15.0));
+        assert_eq!(acc1.held, dec!(0.0));
+
+        // Assert acc2 remains unchanged
+        assert_eq!(acc2.available, dec!(0.0));
+        assert_eq!(acc2.held, dec!(0.0));
     }
 }
