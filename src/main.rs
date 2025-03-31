@@ -4,7 +4,7 @@ use rust_decimal::Decimal;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
-enum TxKind {
+enum TxType {
     Deposit,
     Withdrawal,
     Dispute,
@@ -12,42 +12,44 @@ enum TxKind {
     Chargeback,
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Default)]
+pub struct ClientId(u32);
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct TxId(pub u32);
+
 #[derive(Debug, Deserialize)]
 struct Transaction {
     #[serde(rename = "type")]
-    tx_type: TxKind,
-    client: u16,
-    tx: u32,
+    tx_type: TxType,
+    client: ClientId,
+    tx: TxId,
     amount: Option<Decimal>,
 }
 
 #[derive(Debug, Serialize, Default)]
 struct Account {
-    client: u16,
+    client: ClientId,
     available: Decimal,
     held: Decimal,
-    total: Decimal,
     locked: bool,
 
     #[serde(skip)]
-    history: HashMap<u32, (Decimal, bool)>, // (amount, disputed?)
+    history: HashMap<TxId, (Decimal, bool)>, // (amount, disputed?)
 }
 
 impl Account {
-    fn deposit(&mut self, tx: u32, amount: Decimal) {
+    fn deposit(&mut self, tx: TxId, amount: Decimal) {
         if self.locked { return; }
         self.available += amount;
-        self.total += amount;
         self.history.insert(tx, (amount, false));
     }
 
     fn withdrawal(&mut self, amount: Decimal) {
         if self.locked || self.available < amount { return; }
         self.available -= amount;
-        self.total -= amount;
     }
 
-    fn dispute(&mut self, tx: u32) {
+    fn dispute(&mut self, tx: TxId) {
         if self.locked { return; }
         if let Some((amount, disputed)) = self.history.get_mut(&tx) {
             if !*disputed {
@@ -58,7 +60,7 @@ impl Account {
         }
     }
 
-    fn resolve(&mut self, tx: u32) {
+    fn resolve(&mut self, tx: TxId) {
         if self.locked { return; }
         if let Some((amount, disputed)) = self.history.get_mut(&tx) {
             if *disputed {
@@ -69,12 +71,11 @@ impl Account {
         }
     }
 
-    fn chargeback(&mut self, tx: u32) {
+    fn chargeback(&mut self, tx: TxId) {
         if self.locked { return; }
         if let Some((amount, disputed)) = self.history.get_mut(&tx) {
             if *disputed {
                 self.held -= *amount;
-                self.total -= *amount;
                 self.locked = true;
                 *disputed = false;
             }
@@ -85,7 +86,7 @@ impl Account {
 fn process_transactions(path: &str) -> Result<(), Box<dyn Error>> {
     let file = File::open(path)?;
     let mut reader = csv::ReaderBuilder::new().trim(csv::Trim::All).from_reader(file);
-    let mut accounts: HashMap<u16, Account> = HashMap::new();
+    let mut accounts: HashMap<ClientId, Account> = HashMap::new();
 
     for result in reader.deserialize() {
         let record: Transaction = result?;
@@ -94,25 +95,23 @@ fn process_transactions(path: &str) -> Result<(), Box<dyn Error>> {
         });
 
         match record.tx_type {
-            TxKind::Deposit => {
+            TxType::Deposit => {
                 if let Some(amount) = record.amount {
                     account.deposit(record.tx, amount);
                 }
             },
-            TxKind::Withdrawal => {
+            TxType::Withdrawal => {
                 if let Some(amount) = record.amount {
                     account.withdrawal(amount);
                 }
             },
-            TxKind::Dispute => account.dispute(record.tx),
-            TxKind::Resolve => account.resolve(record.tx),
-            TxKind::Chargeback => account.chargeback(record.tx),
+            TxType::Dispute => account.dispute(record.tx),
+            TxType::Resolve => account.resolve(record.tx),
+            TxType::Chargeback => account.chargeback(record.tx),
         }
     }
 
     let mut writer = csv::Writer::from_writer(io::stdout());
-    writer.write_record(["client", "available", "held", "total", "locked"])?;
-
     for account in accounts.values() {
         writer.serialize(account)?;
     }
@@ -136,105 +135,101 @@ mod tests {
     use super::*;
     use rust_decimal::dec;
 
-    fn test_account(client: u16) -> Account {
+    fn test_account(client: ClientId) -> Account {
         Account { client, ..Default::default() }
     }
 
     #[test]
     fn test_deposit() {
-        let mut acc = test_account(1);
-        acc.deposit(1, dec!(10.0));
+        let mut acc = test_account(ClientId(1));
+        acc.deposit(TxId(1), dec!(10.0));
         assert_eq!(acc.available, dec!(10.0));
-        assert_eq!(acc.total, dec!(10.0));
         assert_eq!(acc.held, dec!(0.0));
     }
 
     #[test]
     fn test_withdrawal() {
-        let mut acc = test_account(1);
-        acc.deposit(1, dec!(10.0));
+        let mut acc = test_account(ClientId(1));
+        acc.deposit(TxId(1), dec!(10.0));
         acc.withdrawal(dec!(4.0));
         assert_eq!(acc.available, dec!(6.0));
-        assert_eq!(acc.total, dec!(6.0));
     }
 
     #[test]
     fn test_withdrawal_insufficient() {
-        let mut acc = test_account(1);
-        acc.deposit(1, dec!(2.0));
+        let mut acc = test_account(ClientId(1));
+        acc.deposit(TxId(1), dec!(2.0));
         acc.withdrawal(dec!(3.0));
         assert_eq!(acc.available, dec!(2.0));
     }
 
     #[test]
     fn test_dispute_valid() {
-        let mut acc = test_account(1);
-        acc.deposit(1, dec!(10.0));
-        acc.dispute(1);
+        let mut acc = test_account(ClientId(1));
+        acc.deposit(TxId(1), dec!(10.0));
+        acc.dispute(TxId(1));
         assert_eq!(acc.available, dec!(0.0));
         assert_eq!(acc.held, dec!(10.0));
     }
 
     #[test]
     fn test_resolve() {
-        let mut acc = test_account(1);
-        acc.deposit(1, dec!(10.0));
-        acc.dispute(1);
-        acc.resolve(1);
+        let mut acc = test_account(ClientId(1));
+        acc.deposit(TxId(1), dec!(10.0));
+        acc.dispute(TxId(1));
+        acc.resolve(TxId(1));
         assert_eq!(acc.available, dec!(10.0));
         assert_eq!(acc.held, dec!(0.0));
     }
 
     #[test]
     fn test_chargeback() {
-        let mut acc = test_account(1);
-        acc.deposit(1, dec!(10.0));
-        acc.dispute(1);
-        acc.chargeback(1);
-        assert_eq!(acc.total, dec!(0.0));
+        let mut acc = test_account(ClientId(1));
+        acc.deposit(TxId(1), dec!(10.0));
+        acc.dispute(TxId(1));
+        acc.chargeback(TxId(1));
         assert_eq!(acc.held, dec!(0.0));
         assert!(acc.locked);
     }
 
     #[test]
     fn test_locked_account_blocks_deposit() {
-        let mut acc = test_account(1);
-        acc.deposit(1, dec!(10.0));
-        acc.dispute(1);
-        acc.chargeback(1);
-        acc.deposit(2, dec!(10.0));
-        assert_eq!(acc.total, dec!(0.0));
+        let mut acc = test_account(ClientId(1));
+        acc.deposit(TxId(1), dec!(10.0));
+        acc.dispute(TxId(1));
+        acc.chargeback(TxId(1));
+        acc.deposit(TxId(2), dec!(10.0));
+        assert_eq!(acc.available, dec!(0.0));
     }
 
     #[test]
     fn test_dispute_nonexistent_tx() {
-        let mut acc = test_account(1);
-        acc.dispute(99); // No tx inserted
+        let mut acc = test_account(ClientId(1));
+        acc.dispute(TxId(99)); // No tx inserted
         assert_eq!(acc.available, dec!(0.0));
         assert_eq!(acc.held, dec!(0.0));
     }
 
     #[test]
     fn test_dispute_on_withdrawal_should_be_ignored() {
-        let mut acc = test_account(1);
-        acc.deposit(1, dec!(10.0));
+        let mut acc = test_account(ClientId(1));
+        acc.deposit(TxId(1), dec!(10.0));
         acc.withdrawal(dec!(5.0)); // No tx id stored for withdrawal
-        acc.dispute(2); // Attempt to dispute non-existent withdrawal
+        acc.dispute(TxId(2)); // Attempt to dispute non-existent withdrawal
         assert_eq!(acc.available, dec!(5.0));
         assert_eq!(acc.held, dec!(0.0));
-        assert_eq!(acc.total, dec!(5.0));
     }
 
     #[test]
     fn test_dispute_tx_not_owned_by_client_is_ignored() {
-        let mut acc1 = test_account(1);
-        let mut acc2 = test_account(2);
+        let mut acc1 = test_account(ClientId(1));
+        let mut acc2 = test_account(ClientId(2));
 
         // Only acc1 has tx 100
-        acc1.deposit(100, dec!(15.0));
+        acc1.deposit(TxId(100), dec!(15.0));
 
         // acc2 tries to dispute tx 100 (which it doesn't own)
-        acc2.dispute(100);
+        acc2.dispute(TxId(100));
 
         // Assert acc1 remains unchanged
         assert_eq!(acc1.available, dec!(15.0));
