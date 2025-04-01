@@ -52,7 +52,7 @@ impl Account {
     fn dispute(&mut self, tx: TxId) {
         if self.locked { return; }
         if let Some((amount, disputed)) = self.history.get_mut(&tx) {
-            if !*disputed {
+            if !*disputed && self.available >= *amount {
                 self.available -= *amount;
                 self.held += *amount;
                 *disputed = true;
@@ -141,83 +141,83 @@ mod tests {
 
     #[test]
     fn test_deposit() {
-        let mut acc = test_account(ClientId(1));
-        acc.deposit(TxId(1), dec!(10.0));
-        assert_eq!(acc.available, dec!(10.0));
-        assert_eq!(acc.held, dec!(0.0));
+        let mut account = test_account(ClientId(1));
+        account.deposit(TxId(1), dec!(10.0));
+        assert_eq!(account.available, dec!(10.0));
+        assert_eq!(account.held, dec!(0.0));
     }
 
     #[test]
     fn test_withdrawal() {
-        let mut acc = test_account(ClientId(1));
-        acc.deposit(TxId(1), dec!(10.0));
-        acc.withdrawal(dec!(4.0));
-        assert_eq!(acc.available, dec!(6.0));
+        let mut account = test_account(ClientId(1));
+        account.deposit(TxId(1), dec!(10.0));
+        account.withdrawal(dec!(4.0));
+        assert_eq!(account.available, dec!(6.0));
     }
 
     #[test]
     fn test_withdrawal_insufficient() {
-        let mut acc = test_account(ClientId(1));
-        acc.deposit(TxId(1), dec!(2.0));
-        acc.withdrawal(dec!(3.0));
-        assert_eq!(acc.available, dec!(2.0));
+        let mut account = test_account(ClientId(1));
+        account.deposit(TxId(1), dec!(2.0));
+        account.withdrawal(dec!(3.0));
+        assert_eq!(account.available, dec!(2.0));
     }
 
     #[test]
     fn test_dispute_valid() {
-        let mut acc = test_account(ClientId(1));
-        acc.deposit(TxId(1), dec!(10.0));
-        acc.dispute(TxId(1));
-        assert_eq!(acc.available, dec!(0.0));
-        assert_eq!(acc.held, dec!(10.0));
+        let mut account = test_account(ClientId(1));
+        account.deposit(TxId(1), dec!(10.0));
+        account.dispute(TxId(1));
+        assert_eq!(account.available, dec!(0.0));
+        assert_eq!(account.held, dec!(10.0));
     }
 
     #[test]
     fn test_resolve() {
-        let mut acc = test_account(ClientId(1));
-        acc.deposit(TxId(1), dec!(10.0));
-        acc.dispute(TxId(1));
-        acc.resolve(TxId(1));
-        assert_eq!(acc.available, dec!(10.0));
-        assert_eq!(acc.held, dec!(0.0));
+        let mut account = test_account(ClientId(1));
+        account.deposit(TxId(1), dec!(10.0));
+        account.dispute(TxId(1));
+        account.resolve(TxId(1));
+        assert_eq!(account.available, dec!(10.0));
+        assert_eq!(account.held, dec!(0.0));
     }
 
     #[test]
     fn test_chargeback() {
-        let mut acc = test_account(ClientId(1));
-        acc.deposit(TxId(1), dec!(10.0));
-        acc.dispute(TxId(1));
-        acc.chargeback(TxId(1));
-        assert_eq!(acc.held, dec!(0.0));
-        assert!(acc.locked);
+        let mut account = test_account(ClientId(1));
+        account.deposit(TxId(1), dec!(10.0));
+        account.dispute(TxId(1));
+        account.chargeback(TxId(1));
+        assert_eq!(account.held, dec!(0.0));
+        assert!(account.locked);
     }
 
     #[test]
     fn test_locked_account_blocks_deposit() {
-        let mut acc = test_account(ClientId(1));
-        acc.deposit(TxId(1), dec!(10.0));
-        acc.dispute(TxId(1));
-        acc.chargeback(TxId(1));
-        acc.deposit(TxId(2), dec!(10.0));
-        assert_eq!(acc.available, dec!(0.0));
+        let mut account = test_account(ClientId(1));
+        account.deposit(TxId(1), dec!(10.0));
+        account.dispute(TxId(1));
+        account.chargeback(TxId(1));
+        account.deposit(TxId(2), dec!(10.0));
+        assert_eq!(account.available, dec!(0.0));
     }
 
     #[test]
     fn test_dispute_nonexistent_tx() {
-        let mut acc = test_account(ClientId(1));
-        acc.dispute(TxId(99)); // No tx inserted
-        assert_eq!(acc.available, dec!(0.0));
-        assert_eq!(acc.held, dec!(0.0));
+        let mut account = test_account(ClientId(1));
+        account.dispute(TxId(99)); // No tx inserted
+        assert_eq!(account.available, dec!(0.0));
+        assert_eq!(account.held, dec!(0.0));
     }
 
     #[test]
     fn test_dispute_on_withdrawal_should_be_ignored() {
-        let mut acc = test_account(ClientId(1));
-        acc.deposit(TxId(1), dec!(10.0));
-        acc.withdrawal(dec!(5.0)); // No tx id stored for withdrawal
-        acc.dispute(TxId(2)); // Attempt to dispute non-existent withdrawal
-        assert_eq!(acc.available, dec!(5.0));
-        assert_eq!(acc.held, dec!(0.0));
+        let mut account = test_account(ClientId(1));
+        account.deposit(TxId(1), dec!(10.0));
+        account.withdrawal(dec!(5.0)); // No tx id stored for withdrawal
+        account.dispute(TxId(2)); // Attempt to dispute non-existent withdrawal
+        assert_eq!(account.available, dec!(5.0));
+        assert_eq!(account.held, dec!(0.0));
     }
 
     #[test]
@@ -239,4 +239,15 @@ mod tests {
         assert_eq!(acc2.available, dec!(0.0));
         assert_eq!(acc2.held, dec!(0.0));
     }
+
+    #[test]
+    fn test_dispute_after_funds_already_withdrawn_should_fail() {
+        let mut account = test_account(ClientId(1));
+        account.deposit(TxId(1), dec!(10.0));
+        account.withdrawal(dec!(10.0));
+        account.dispute(TxId(1)); // Should be ignored
+        assert_eq!(account.available, dec!(0.0));
+        assert_eq!(account.held, dec!(0.0));
+    }
+
 }
